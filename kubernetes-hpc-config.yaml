@@ -1,0 +1,121 @@
+# HPC Kubernetes Cluster Yapılandırması
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hpc-cluster
+---
+# Storage Class tanımı
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hpc-storage
+provisioner: kubernetes.io/nfs
+parameters:
+  type: nfs
+---
+# Persistent Volume
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hpc-shared-storage
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  storageClassName: hpc-storage
+  nfs:
+    server: nfs-server.default.svc.cluster.local
+    path: "/shared"
+---
+# HPC İş Yükü için ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hpc-config
+  namespace: hpc-cluster
+data:
+  slurm.conf: |
+    ControlMachine=master
+    ControlAddr=master
+    NodeName=worker[1-100] CPUs=32 RealMemory=128000 State=UNKNOWN
+    PartitionName=compute Nodes=worker[1-100] Default=YES MaxTime=INFINITE State=UP
+---
+# Master Node Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpc-master
+  namespace: hpc-cluster
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hpc-master
+  template:
+    metadata:
+      labels:
+        app: hpc-master
+    spec:
+      containers:
+      - name: master
+        image: hpc-master:latest
+        resources:
+          requests:
+            memory: "8Gi"
+            cpu: "4"
+          limits:
+            memory: "16Gi"
+            cpu: "8"
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /shared
+        - name: config
+          mountPath: /etc/slurm
+      volumes:
+      - name: shared-storage
+        persistentVolumeClaim:
+          claimName: hpc-shared-storage
+      - name: config
+        configMap:
+          name: hpc-config
+---
+# Worker Node DaemonSet
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hpc-worker
+  namespace: hpc-cluster
+spec:
+  selector:
+    matchLabels:
+      app: hpc-worker
+  template:
+    metadata:
+      labels:
+        app: hpc-worker
+    spec:
+      containers:
+      - name: worker
+        image: hpc-worker:latest
+        resources:
+          requests:
+            memory: "64Gi"
+            cpu: "16"
+          limits:
+            memory: "128Gi"
+            cpu: "32"
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /shared
+        - name: config
+          mountPath: /etc/slurm
+      volumes:
+      - name: shared-storage
+        persistentVolumeClaim:
+          claimName: hpc-shared-storage
+      - name: config
+        configMap:
+          name: hpc-config
